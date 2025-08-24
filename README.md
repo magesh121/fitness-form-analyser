@@ -1,7 +1,7 @@
 
 
 <p align="center">
-  <img src="https://github.com/magesh121/fitness-form-analyser/blob/main/download.jpg" alt="Project Banner" height="400 width="400"/>
+  <img src="https://github.com/magesh121/fitness-form-analyser/blob/main/download.jpg" alt="Project Banner" height="300 width="400"/>
 </p>
 
 <h1 align="center">🏋️‍♂️ AI Fitness Form Checker 🤖</h1>
