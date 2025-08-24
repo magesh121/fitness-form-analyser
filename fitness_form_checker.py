@@ -1,7 +1,3 @@
-
-# Real-Time Fitness Form Checker with Enhanced UI
-# A complete ML/DL system for detecting exercise form using MediaPipe and OpenCV
-
 import cv2
 import numpy as np
 import pandas as pd
@@ -20,6 +16,9 @@ import plotly.graph_objects as go
 import plotly.express as px
 from datetime import datetime
 import time
+import tempfile
+import os
+from pathlib import Path
 
 warnings.filterwarnings('ignore')
 
@@ -60,6 +59,46 @@ def load_css():
         color: white;
         text-align: center;
         box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+    }
+    
+    /* Tab styling */
+    .stTabs [data-baseweb="tab-list"] {
+        background-color: rgba(255, 255, 255, 0.9);
+        border-radius: 10px;
+        padding: 5px;
+        gap: 5px;
+    }
+    
+    .stTabs [data-baseweb="tab"] {
+        height: 50px;
+        background-color: rgba(102, 126, 234, 0.1);
+        border-radius: 10px;
+        color: #667eea;
+        font-weight: bold;
+        padding: 0 20px;
+    }
+    
+    .stTabs [aria-selected="true"] {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+    }
+    
+    /* File uploader styling */
+    .uploadedFile {
+        background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+        border-radius: 10px;
+        padding: 15px;
+        margin: 10px 0;
+        color: white;
+    }
+    
+    /* Video analysis card */
+    .video-analysis-card {
+        background: white;
+        border-radius: 20px;
+        padding: 20px;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+        margin: 20px 0;
     }
     
     /* Success/Error/Warning boxes */
@@ -108,11 +147,6 @@ def load_css():
         box-shadow: 0 8px 20px rgba(0,0,0,0.3);
     }
     
-    /* Sidebar styling */
-    .css-1d391kg {
-        background: rgba(255, 255, 255, 0.9);
-    }
-    
     /* Video container */
     .video-container {
         border-radius: 20px;
@@ -131,48 +165,7 @@ def load_css():
         box-shadow: 0 5px 20px rgba(147,51,234,0.3);
     }
     
-    /* Stress level indicators */
-    .stress-indicator {
-        display: inline-block;
-        width: 20px;
-        height: 20px;
-        border-radius: 50%;
-        margin-right: 10px;
-    }
-    
-    .stress-low { background: #4CAF50; }
-    .stress-medium { background: #FFC107; }
-    .stress-high { background: #f44336; }
-    
-    /* Form status badge */
-    .form-status {
-        position: absolute;
-        top: 20px;
-        right: 20px;
-        padding: 10px 20px;
-        border-radius: 25px;
-        font-weight: bold;
-        font-size: 18px;
-        animation: pulse 2s infinite;
-    }
-    
-    @keyframes pulse {
-        0% { transform: scale(1); }
-        50% { transform: scale(1.05); }
-        100% { transform: scale(1); }
-    }
-    
-    .form-good {
-        background: #4CAF50;
-        color: white;
-    }
-    
-    .form-bad {
-        background: #f44336;
-        color: white;
-    }
-    
-    /* Progress indicators */
+    /* Progress bar for video processing */
     .progress-container {
         background: #f0f0f0;
         border-radius: 20px;
@@ -190,6 +183,16 @@ def load_css():
         justify-content: center;
         color: white;
         font-weight: bold;
+    }
+    
+    /* Analysis results card */
+    .analysis-result-card {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 30px;
+        border-radius: 20px;
+        margin: 20px 0;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.2);
     }
     </style>
     """, unsafe_allow_html=True)
@@ -638,6 +641,144 @@ class SquatFormClassifier:
         
         return stress_data
 
+class VideoAnalyzer:
+    """Class to handle video file analysis"""
+    
+    def __init__(self, pose_extractor, classifier):
+        self.pose_extractor = pose_extractor
+        self.classifier = classifier
+    
+    def analyze_video(self, video_path, progress_callback=None):
+        """Analyze an entire video and return frame-by-frame results"""
+        cap = cv2.VideoCapture(video_path)
+        fps = int(cap.get(cv2.CAP_PROP_FPS))
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        
+        results = {
+            'fps': fps,
+            'total_frames': total_frames,
+            'frame_data': [],
+            'summary': {
+                'total_reps': 0,
+                'good_form_frames': 0,
+                'bad_form_frames': 0,
+                'average_knee_angle': 0,
+                'average_hip_angle': 0,
+                'stress_timeline': []
+            }
+        }
+        
+        frame_count = 0
+        in_squat = False
+        knee_angles = []
+        hip_angles = []
+        
+        while cap.isOpened():
+            ret, frame = cap.read()
+            if not ret:
+                break
+            
+            # Update progress
+            if progress_callback:
+                progress_callback(frame_count / total_frames)
+            
+            # Extract pose
+            landmarks = self.pose_extractor.extract_landmarks(frame)
+            features = self.pose_extractor.extract_squat_features(landmarks)
+            
+            if features:
+                # Get prediction
+                prediction, confidence = self.classifier.predict_form(features)
+                stress_data = self.classifier.calculate_stress_levels(features)
+                
+                # Track metrics
+                knee_angle = (features[0] + features[1]) / 2
+                hip_angle = (features[2] + features[3]) / 2
+                knee_angles.append(knee_angle)
+                hip_angles.append(hip_angle)
+                
+                # Count reps
+                if knee_angle < 100 and not in_squat:
+                    in_squat = True
+                elif knee_angle > 140 and in_squat:
+                    in_squat = False
+                    results['summary']['total_reps'] += 1
+                
+                # Update counters
+                if prediction == 1:
+                    results['summary']['good_form_frames'] += 1
+                else:
+                    results['summary']['bad_form_frames'] += 1
+                
+                # Store frame data
+                frame_info = {
+                    'frame_number': frame_count,
+                    'timestamp': frame_count / fps,
+                    'prediction': prediction,
+                    'confidence': confidence,
+                    'features': features,
+                    'stress_data': stress_data,
+                    'feedback': self.classifier.get_feedback(features)
+                }
+                results['frame_data'].append(frame_info)
+                
+                # Store stress timeline
+                avg_stress = np.mean(list(stress_data.values()))
+                results['summary']['stress_timeline'].append(avg_stress)
+            
+            frame_count += 1
+        
+        # Calculate averages
+        if knee_angles:
+            results['summary']['average_knee_angle'] = np.mean(knee_angles)
+        if hip_angles:
+            results['summary']['average_hip_angle'] = np.mean(hip_angles)
+        
+        cap.release()
+        return results
+    
+    def create_highlight_reel(self, video_path, results, output_path):
+        """Create a highlight video with annotations"""
+        cap = cv2.VideoCapture(video_path)
+        fps = int(cap.get(cv2.CAP_PROP_FPS))
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        
+        # Video writer
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+        
+        frame_count = 0
+        for frame_info in results['frame_data']:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            
+            if frame_count == frame_info['frame_number']:
+                # Extract pose for visualization
+                landmarks = self.pose_extractor.extract_landmarks(frame)
+                
+                # Draw enhanced visualization
+                frame_with_viz = self.pose_extractor.draw_enhanced_pose(
+                    frame, landmarks, 
+                    frame_info['prediction'], 
+                    frame_info['stress_data']
+                )
+                
+                # Add timestamp
+                timestamp_text = f"Time: {frame_info['timestamp']:.1f}s"
+                cv2.putText(frame_with_viz, timestamp_text, (20, 30),
+                           cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+                
+                out.write(frame_with_viz)
+            
+            frame_count += 1
+        
+        cap.release()
+        out.release()
+        
+        return output_path
+
 def create_animated_stress_gauge(stress_value, label):
     """Create an animated gauge chart for stress visualization"""
     fig = go.Figure(go.Indicator(
@@ -692,8 +833,575 @@ def create_rep_counter_display(rep_count, target_reps=10):
     </div>
     """
 
+def create_video_analysis_summary(results):
+    """Create a comprehensive summary of video analysis"""
+    total_time = results['total_frames'] / results['fps']
+    good_form_percentage = (results['summary']['good_form_frames'] / 
+                           results['total_frames'] * 100) if results['total_frames'] > 0 else 0
+    
+    # Create timeline chart
+    fig_timeline = go.Figure()
+    
+    # Add stress timeline
+    timestamps = [i/results['fps'] for i in range(len(results['summary']['stress_timeline']))]
+    fig_timeline.add_trace(go.Scatter(
+        x=timestamps,
+        y=results['summary']['stress_timeline'],
+        mode='lines',
+        name='Average Stress',
+        line=dict(color='rgb(255, 0, 0)', width=2)
+            ))
+    
+    # Add form quality indicators
+    good_form_times = []
+    bad_form_times = []
+    for frame_info in results['frame_data']:
+        if frame_info['prediction'] == 1:
+            good_form_times.append(frame_info['timestamp'])
+        else:
+            bad_form_times.append(frame_info['timestamp'])
+    
+    if good_form_times:
+        fig_timeline.add_trace(go.Scatter(
+            x=good_form_times,
+            y=[0.1] * len(good_form_times),
+            mode='markers',
+            name='Good Form',
+            marker=dict(color='green', size=8, symbol='circle')
+        ))
+    
+    if bad_form_times:
+        fig_timeline.add_trace(go.Scatter(
+            x=bad_form_times,
+            y=[0.9] * len(bad_form_times),
+            mode='markers',
+            name='Needs Improvement',
+            marker=dict(color='red', size=8, symbol='x')
+        ))
+    
+    fig_timeline.update_layout(
+        title="Form Quality Timeline",
+        xaxis_title="Time (seconds)",
+        yaxis_title="Stress Level / Form Indicators",
+        height=300,
+        showlegend=True,
+        yaxis=dict(range=[0, 1])
+    )
+    
+    return {
+        'total_time': total_time,
+        'good_form_percentage': good_form_percentage,
+        'timeline_chart': fig_timeline
+    }
+
+def render_live_camera_tab(form_checker):
+    """Render the live camera analysis tab"""
+    col1, col2 = st.columns([3, 2])
+    
+    with col1:
+        st.markdown("""
+        <div style="background: white; padding: 20px; border-radius: 20px; box-shadow: 0 5px 20px rgba(0,0,0,0.1);">
+            <h2 style="color: #667eea; text-align: center;">📹 Live Exercise Feed</h2>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        video_placeholder = st.empty()
+        
+        # Camera control
+        camera_on = st.checkbox("🔴 Enable Live Camera", key="live_camera_toggle")
+        
+        if camera_on and st.session_state.trained:
+            # Start camera and process feed
+            pose_extractor = form_checker.pose_extractor
+            
+            cap = cv2.VideoCapture(0)
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+            
+            if not cap.isOpened():
+                st.error("❌ Cannot access camera")
+            else:
+                # Create placeholder for live updates
+                feedback_placeholder = col2.empty()
+                
+                while camera_on and st.session_state.get('live_camera_toggle', False):
+                    ret, frame = cap.read()
+                    if not ret:
+                        st.error("Failed to read from camera")
+                        break
+                    
+                    # Extract pose
+                    results = pose_extractor.extract_landmarks(frame)
+                    
+                    # Extract features
+                    features = pose_extractor.extract_squat_features(results)
+                    
+                    # Get prediction
+                    prediction, confidence = form_checker.classifier.predict_form(features)
+                    
+                    # Get feedback
+                    feedback_list = form_checker.classifier.get_feedback(features)
+                    
+                    # Calculate stress levels
+                    stress_data = form_checker.classifier.calculate_stress_levels(features)
+                    
+                    # Draw enhanced visualization
+                    frame_with_viz = pose_extractor.draw_enhanced_pose(
+                        frame, results, prediction, stress_data)
+                    
+                    # Display frame
+                    video_placeholder.image(frame_with_viz, channels="BGR", use_column_width=True)
+                    
+                    # Update feedback panel
+                    render_feedback_panel(feedback_placeholder, prediction, confidence, 
+                                        features, stress_data, feedback_list)
+                
+                cap.release()
+        
+        elif camera_on and not st.session_state.trained:
+            st.markdown("""
+            <div style="background: #FFF3CD; color: #856404; padding: 20px; 
+                       border-radius: 15px; text-align: center;">
+                <h3>⚠️ Please train the model first!</h3>
+                <p>Click the "Train Model" button in the sidebar to get started.</p>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        else:
+            # Show welcome screen
+            st.markdown("""
+            <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+                       color: white; padding: 40px; border-radius: 20px; text-align: center;">
+                <h2 style="font-size: 2.5rem; margin-bottom: 20px;">Live Camera Analysis 🎯</h2>
+                <p style="font-size: 1.2rem; margin-bottom: 30px;">
+                    Get real-time feedback on your form as you exercise!
+                </p>
+                <div style="background: rgba(255,255,255,0.2); padding: 20px; border-radius: 15px;">
+                    <h3>Instructions:</h3>
+                    <ol style="text-align: left; font-size: 1.1rem;">
+                        <li>Enable your camera using the checkbox above</li>
+                        <li>Position yourself so your full body is visible</li>
+                        <li>Start performing squats</li>
+                        <li>Watch for real-time feedback on your form</li>
+                    </ol>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+    
+    with col2:
+        if not camera_on:
+            render_exercise_guide()
+
+def render_video_upload_tab(form_checker):
+    """Render the video upload and analysis tab"""
+    st.markdown("""
+    <div style="background: white; padding: 20px; border-radius: 20px; box-shadow: 0 5px 20px rgba(0,0,0,0.1);">
+        <h2 style="color: #667eea; text-align: center;">📁 Video File Analysis</h2>
+        <p style="text-align: center; color: #666;">Upload your workout video for detailed analysis</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # File uploader
+    uploaded_file = st.file_uploader(
+        "Choose a video file",
+        type=['mp4', 'avi', 'mov', 'mkv'],
+        help="Upload a video of yourself performing squats"
+    )
+    
+    if uploaded_file is not None:
+        # Save uploaded file temporarily
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.mp4') as tmp_file:
+            tmp_file.write(uploaded_file.read())
+            video_path = tmp_file.name
+        
+        # Display video info
+        st.markdown(f"""
+        <div class="uploadedFile">
+            <h4>📹 Uploaded: {uploaded_file.name}</h4>
+            <p>Size: {uploaded_file.size / 1024 / 1024:.2f} MB</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Analysis options
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            analyze_full = st.checkbox("Full Analysis", value=True)
+        with col2:
+            create_highlights = st.checkbox("Create Highlights", value=True)
+        with col3:
+            export_report = st.checkbox("Export Report", value=True)
+        
+        if st.button("🚀 Start Analysis", type="primary", use_container_width=True):
+            if not st.session_state.trained:
+                st.error("⚠️ Please train the model first!")
+            else:
+                # Create progress container
+                progress_container = st.container()
+                with progress_container:
+                    st.markdown("""
+                    <div class="analysis-result-card">
+                        <h3 style="text-align: center;">🔍 Analyzing Video...</h3>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    progress_bar = st.progress(0)
+                    status_text = st.empty()
+                    
+                    # Initialize video analyzer
+                    video_analyzer = VideoAnalyzer(
+                        form_checker.pose_extractor,
+                        form_checker.classifier
+                    )
+                    
+                    # Progress callback
+                    def update_progress(progress):
+                        progress_bar.progress(progress)
+                        status_text.text(f"Processing: {progress*100:.1f}%")
+                    
+                    # Analyze video
+                    with st.spinner("Analyzing video..."):
+                        results = video_analyzer.analyze_video(video_path, update_progress)
+                    
+                    # Clear progress
+                    progress_container.empty()
+                    
+                    # Display results
+                    display_video_analysis_results(results, video_path, video_analyzer, 
+                                                 create_highlights, export_report)
+        
+        # Clean up temp file
+        try:
+            os.unlink(video_path)
+        except:
+            pass
+    else:
+        # Show upload instructions
+        st.markdown("""
+        <div style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); 
+                   color: white; padding: 40px; border-radius: 20px; text-align: center; margin-top: 20px;">
+            <h2 style="font-size: 2rem; margin-bottom: 20px;">Upload Your Workout Video 📹</h2>
+            <p style="font-size: 1.1rem; margin-bottom: 20px;">
+                Get comprehensive analysis of your exercise form from recorded videos
+            </p>
+            <div style="background: rgba(255,255,255,0.2); padding: 20px; border-radius: 15px; text-align: left;">
+                <h4>What you'll get:</h4>
+                <ul style="font-size: 1rem;">
+                    <li>✅ Frame-by-frame form analysis</li>
+                    <li>📊 Detailed performance metrics</li>
+                    <li>🎯 Stress level visualization</li>
+                    <li>💡 Personalized improvement tips</li>
+                    <li>🎬 Annotated highlight reel</li>
+                    <li>📄 Exportable analysis report</li>
+                </ul>
+            </div>
+            <p style="margin-top: 20px; font-size: 0.9rem;">
+                Supported formats: MP4, AVI, MOV, MKV
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+
+def display_video_analysis_results(results, video_path, video_analyzer, 
+                                   create_highlights, export_report):
+    """Display comprehensive video analysis results"""
+    # Summary metrics
+    st.markdown("""
+    <div class="analysis-result-card">
+        <h2 style="text-align: center; margin-bottom: 30px;">📊 Analysis Complete!</h2>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Key metrics
+    col1, col2, col3, col4 = st.columns(4)
+    
+    summary = results['summary']
+    total_time = results['total_frames'] / results['fps']
+    good_form_percentage = (summary['good_form_frames'] / 
+                           results['total_frames'] * 100) if results['total_frames'] > 0 else 0
+    
+    with col1:
+        st.metric("Total Reps", summary['total_reps'], 
+                 help="Number of complete squats detected")
+    
+    with col2:
+        st.metric("Good Form %", f"{good_form_percentage:.1f}%",
+                 delta=f"{good_form_percentage-50:.1f}%" if good_form_percentage > 50 else None,
+                 help="Percentage of frames with good form")
+    
+    with col3:
+        st.metric("Avg Knee Angle", f"{summary['average_knee_angle']:.1f}°",
+                 help="Average knee angle during squats")
+    
+    with col4:
+        st.metric("Duration", f"{total_time:.1f}s",
+                 help="Total video duration")
+    
+    # Timeline visualization
+    st.markdown("### 📈 Performance Timeline")
+    summary_data = create_video_analysis_summary(results)
+    st.plotly_chart(summary_data['timeline_chart'], use_container_width=True)
+    
+    # Detailed frame analysis
+    with st.expander("🔍 Detailed Frame Analysis"):
+        # Sample frames for visualization
+        sample_indices = np.linspace(0, len(results['frame_data'])-1, 
+                                   min(10, len(results['frame_data']))).astype(int)
+        
+        st.markdown("#### Sample Frames Analysis")
+        frame_cols = st.columns(5)
+        
+        for idx, frame_idx in enumerate(sample_indices[:5]):
+            frame_info = results['frame_data'][frame_idx]
+            with frame_cols[idx % 5]:
+                if frame_info['prediction'] == 1:
+                    st.success(f"Frame {frame_info['frame_number']}")
+                else:
+                    st.error(f"Frame {frame_info['frame_number']}")
+                st.caption(f"Time: {frame_info['timestamp']:.1f}s")
+    
+    # Stress analysis
+    st.markdown("### 🎯 Body Part Stress Analysis")
+    
+    # Calculate average stress for each body part
+    avg_stress = {}
+    for part in ['left_knee_stress', 'right_knee_stress', 'left_hip_stress', 
+                 'right_hip_stress', 'spine_stress', 'left_ankle_stress', 'right_ankle_stress']:
+        stress_values = [frame['stress_data'][part] for frame in results['frame_data'] 
+                        if frame['stress_data']]
+        if stress_values:
+            avg_stress[part] = np.mean(stress_values)
+    
+    # Display stress gauges
+    gauge_cols = st.columns(4)
+    for idx, (part, stress) in enumerate(avg_stress.items()):
+        with gauge_cols[idx % 4]:
+            part_name = part.replace('_stress', '').replace('_', ' ').title()
+            fig = create_animated_stress_gauge(stress, part_name)
+            st.plotly_chart(fig, use_container_width=True)
+    
+    # Feedback summary
+    st.markdown("### 💡 Common Issues Detected")
+    
+    # Aggregate feedback
+    feedback_counts = {}
+    for frame_info in results['frame_data']:
+        if frame_info['feedback']:
+            for feedback in frame_info['feedback']:
+                feedback_counts[feedback] = feedback_counts.get(feedback, 0) + 1
+    
+    # Sort by frequency
+    sorted_feedback = sorted(feedback_counts.items(), key=lambda x: x[1], reverse=True)
+    
+    for feedback, count in sorted_feedback[:5]:
+        frequency = count / len(results['frame_data']) * 100
+        if frequency > 20:
+            st.warning(f"{feedback} (Detected in {frequency:.0f}% of frames)")
+        else:
+            st.info(f"{feedback} (Detected in {frequency:.0f}% of frames)")
+    
+    # Create highlights if requested
+    if create_highlights:
+        st.markdown("### 🎬 Creating Highlight Reel...")
+        with st.spinner("Generating annotated video..."):
+            output_path = "highlighted_video.mp4"
+            video_analyzer.create_highlight_reel(video_path, results, output_path)
+            
+            # Provide download link
+            with open(output_path, 'rb') as f:
+                video_bytes = f.read()
+                st.download_button(
+                    label="📥 Download Annotated Video",
+                    data=video_bytes,
+                    file_name="squat_analysis_highlights.mp4",
+                    mime="video/mp4"
+                )
+            
+            # Clean up
+            try:
+                os.unlink(output_path)
+            except:
+                pass
+    
+    # Export report if requested
+    if export_report:
+        st.markdown("### 📄 Export Analysis Report")
+        report = generate_analysis_report(results)
+        st.download_button(
+            label="📥 Download Report (PDF)",
+            data=report,
+            file_name="squat_analysis_report.pdf",
+            mime="application/pdf"
+        )
+
+def render_feedback_panel(placeholder, prediction, confidence, features, stress_data, feedback_list):
+    """Render the feedback panel with all metrics"""
+    with placeholder.container():
+        # Form quality indicator
+        if prediction is not None:
+            if prediction == 1:
+                st.markdown("""
+                <div style="background: linear-gradient(135deg, #4CAF50 0%, #8BC34A 100%); 
+                            color: white; padding: 20px; border-radius: 15px; 
+                            text-align: center; margin-bottom: 20px;">
+                    <h2 style="margin: 0;">✨ EXCELLENT FORM!</h2>
+                    <p style="margin: 5px 0; font-size: 1.2rem;">Keep it up! 💪</p>
+                </div>
+                """, unsafe_allow_html=True)
+            else:
+                st.markdown("""
+                <div style="background: linear-gradient(135deg, #f44336 0%, #FF6B6B 100%); 
+                            color: white; padding: 20px; border-radius: 15px; 
+                            text-align: center; margin-bottom: 20px;">
+                    <h2 style="margin: 0;">⚠️ NEEDS IMPROVEMENT</h2>
+                    <p style="margin: 5px 0; font-size: 1.2rem;">Check the tips below 👇</p>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            # Confidence meter
+            st.markdown(f"""
+            <div style="background: #f0f0f0; border-radius: 10px; padding: 10px; margin-bottom: 20px;">
+                <h4 style="margin: 0; color: #667eea;">AI Confidence: {confidence:.0%}</h4>
+                <div style="background: #ddd; border-radius: 5px; height: 20px; margin-top: 5px;">
+                    <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+                               width: {confidence*100}%; height: 100%; border-radius: 5px;">
+                    </div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Rep counter update
+            if features:
+                # Simple rep counting logic based on knee angle
+                knee_angle = (features[0] + features[1]) / 2
+                if knee_angle < 100 and not st.session_state.in_squat:
+                    st.session_state.in_squat = True
+                elif knee_angle > 140 and st.session_state.in_squat:
+                    st.session_state.in_squat = False
+                    st.session_state.rep_count += 1
+                    st.session_state.session_stats['total_reps'] += 1
+                    if prediction == 1:
+                        st.session_state.session_stats['good_form_reps'] += 1
+            
+            # Display rep counter
+            st.markdown(create_rep_counter_display(st.session_state.rep_count), 
+                       unsafe_allow_html=True)
+            
+            # Feedback tips
+            st.markdown("""
+            <div style="background: #f8f9fa; padding: 15px; border-radius: 15px; margin-bottom: 20px;">
+                <h3 style="color: #667eea; margin-bottom: 10px;">💡 Form Tips</h3>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            for tip in feedback_list:
+                st.info(tip)
+            
+            # Pose metrics
+            if features:
+                st.markdown("""
+                <div style="background: linear-gradient(135deg, #6B46C1 0%, #9333EA 100%); 
+                           color: white; padding: 20px; border-radius: 15px; margin-top: 20px;">
+                    <h3 style="text-align: center; margin-bottom: 15px;">📊 Pose Metrics</h3>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                metric_cols = st.columns(2)
+                metrics = [
+                    ("Left Knee", features[0], "°"),
+                    ("Right Knee", features[1], "°"),
+                    ("Left Hip", features[2], "°"),
+                    ("Right Hip", features[3], "°"),
+                    ("Spine Align", features[4] * 100, "%"),
+                    ("Depth", features[7] * 100, "%")
+                ]
+                
+                for idx, (name, value, unit) in enumerate(metrics):
+                    col = metric_cols[idx % 2]
+                    with col:
+                        # Determine if value is in good range
+                        is_good = True
+                        if "Knee" in name or "Hip" in name:
+                            is_good = 90 <= value <= 120
+                        elif "Align" in name:
+                            is_good = value < 8
+                        elif "Depth" in name:
+                            is_good = 15 <= value <= 25
+                        
+                        color = "#4CAF50" if is_good else "#f44336"
+                        
+                        st.markdown(f"""
+                        <div style="background: {color}; color: white; padding: 10px; 
+                                   border-radius: 10px; margin: 5px 0; text-align: center;">
+                            <b>{name}</b><br>
+                            <span style="font-size: 1.5rem;">{value:.1f}{unit}</span>
+                        </div>
+                        """, unsafe_allow_html=True)
+        else:
+            st.warning("🔍 No pose detected - make sure you're in frame!")
+
+def render_exercise_guide():
+    """Render exercise guide and tips"""
+    st.markdown("""
+    <div style="background: white; padding: 30px; border-radius: 20px; 
+               box-shadow: 0 5px 20px rgba(0,0,0,0.1);">
+        <h2 style="color: #667eea; text-align: center; margin-bottom: 20px;">
+            🏋️‍♂️ Perfect Squat Guide
+        </h2>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Exercise tips with colorful cards
+    tips = [
+        ("🦵", "Stance", "Feet shoulder-width apart, toes slightly outward"),
+        ("📐", "Depth", "Lower until thighs are parallel to ground"),
+        ("🎯", "Knees", "Keep knees tracking over toes"),
+        ("🏔️", "Back", "Maintain neutral spine throughout"),
+        ("⚖️", "Weight", "Keep weight balanced on mid-foot"),
+        ("💨", "Breathing", "Inhale down, exhale up")
+    ]
+    
+    for icon, title, desc in tips:
+        st.markdown(f"""
+        <div style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); 
+                   color: white; padding: 15px; border-radius: 10px; margin: 10px 0;">
+            <h4 style="margin: 0;">{icon} {title}</h4>
+            <p style="margin: 5px 0 0 0; font-size: 0.9rem;">{desc}</p>
+        </div>
+        """, unsafe_allow_html=True)
+
+def generate_analysis_report(results):
+    """Generate a PDF report of the analysis (placeholder for actual PDF generation)"""
+    # This is a placeholder - in a real implementation, you would use a library like reportlab
+    # to generate an actual PDF report
+    report_content = f"""
+    SQUAT FORM ANALYSIS REPORT
+    ==========================
+    
+    Analysis Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+    
+    SUMMARY METRICS
+    ---------------
+    Total Reps: {results['summary']['total_reps']}
+    Good Form Frames: {results['summary']['good_form_frames']}
+    Bad Form Frames: {results['summary']['bad_form_frames']}
+    Good Form Percentage: {(results['summary']['good_form_frames'] / results['total_frames'] * 100):.1f}%
+    
+    Average Knee Angle: {results['summary']['average_knee_angle']:.1f}°
+    Average Hip Angle: {results['summary']['average_hip_angle']:.1f}°
+    
+    RECOMMENDATIONS
+    ---------------
+    Based on the analysis, focus on:
+    1. Maintaining consistent knee angle between 90-120 degrees
+    2. Keeping spine neutral throughout the movement
+    3. Ensuring knees track over toes
+    
+    For detailed frame-by-frame analysis, please refer to the highlighted video.
+    """
+    
+    return report_content.encode('utf-8')
+
 def create_streamlit_app():
-    """Create enhanced Streamlit interface"""
+    """Create enhanced Streamlit interface with tabs"""
     st.set_page_config(
         page_title="AI Fitness Form Checker", 
         layout="wide",
@@ -754,10 +1462,6 @@ def create_streamlit_app():
         
         st.markdown("---")
         
-        # Camera control
-        st.markdown("### 📹 Step 2: Camera Control")
-        camera_on = st.checkbox("🔴 Enable Live Camera", key="camera_toggle")
-        
         # Session stats
         if st.session_state.session_stats['total_reps'] > 0:
             st.markdown("### 📊 Session Statistics")
@@ -775,285 +1479,30 @@ def create_streamlit_app():
                 'start_time': None
             }
             st.success("Session reset!")
+        
+        # Help section
+        with st.expander("❓ Need Help?"):
+            st.markdown("""
+            **Quick Tips:**
+            - Train the model first (one-time setup)
+            - Choose between live camera or video upload
+            - Ensure good lighting and full body visibility
+            - Stand 6-10 feet from camera
+            
+            **Troubleshooting:**
+            - Camera not working? Check browser permissions
+            - Low accuracy? Ensure proper lighting
+            - Slow performance? Close other applications
+            """)
     
-    # Main content area
-    col1, col2 = st.columns([3, 2])
+    # Main content area with tabs
+    tab1, tab2 = st.tabs(["📹 Live Camera", "📁 Upload Video"])
     
-    with col1:
-        st.markdown("""
-        <div style="background: white; padding: 20px; border-radius: 20px; box-shadow: 0 5px 20px rgba(0,0,0,0.1);">
-            <h2 style="color: #667eea; text-align: center;">📹 Live Exercise Feed</h2>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        video_placeholder = st.empty()
-        
-        if camera_on and st.session_state.trained:
-            # Start camera and process feed
-            form_checker = st.session_state.form_checker
-            pose_extractor = form_checker.pose_extractor
-            
-            cap = cv2.VideoCapture(0)
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-            
-            if not cap.isOpened():
-                st.error("❌ Cannot access camera")
-            else:
-                # Create placeholder for live updates
-                feedback_placeholder = col2.empty()
-                
-                while camera_on:
-                    ret, frame = cap.read()
-                    if not ret:
-                        st.error("Failed to read from camera")
-                        break
-                    
-                    # Extract pose
-                    results = pose_extractor.extract_landmarks(frame)
-                    
-                    # Extract features
-                    features = pose_extractor.extract_squat_features(results)
-                    
-                    # Get prediction
-                    prediction, confidence = form_checker.classifier.predict_form(features)
-                    
-                    # Get feedback
-                    feedback_list = form_checker.classifier.get_feedback(features)
-                    
-                    # Calculate stress levels
-                    stress_data = form_checker.classifier.calculate_stress_levels(features)
-                    
-                    # Draw enhanced visualization
-                    frame_with_viz = pose_extractor.draw_enhanced_pose(
-                        frame, results, prediction, stress_data)
-                    
-                    # Display frame
-                    video_placeholder.image(frame_with_viz, channels="BGR", use_column_width=True)
-                    
-                    # Update feedback panel
-                    with feedback_placeholder.container():
-                        # Form quality indicator
-                        if prediction is not None:
-                            if prediction == 1:
-                                st.markdown("""
-                                <div style="background: linear-gradient(135deg, #4CAF50 0%, #8BC34A 100%); 
-                                            color: white; padding: 20px; border-radius: 15px; 
-                                            text-align: center; margin-bottom: 20px;">
-                                    <h2 style="margin: 0;">✨ EXCELLENT FORM!</h2>
-                                    <p style="margin: 5px 0; font-size: 1.2rem;">Keep it up! 💪</p>
-                                </div>
-                                """, unsafe_allow_html=True)
-                            else:
-                                st.markdown("""
-                                <div style="background: linear-gradient(135deg, #f44336 0%, #FF6B6B 100%); 
-                                            color: white; padding: 20px; border-radius: 15px; 
-                                            text-align: center; margin-bottom: 20px;">
-                                    <h2 style="margin: 0;">⚠️ NEEDS IMPROVEMENT</h2>
-                                    <p style="margin: 5px 0; font-size: 1.2rem;">Check the tips below 👇</p>
-                                </div>
-                                """, unsafe_allow_html=True)
-                            
-                            # Confidence meter
-                            st.markdown(f"""
-                            <div style="background: #f0f0f0; border-radius: 10px; padding: 10px; margin-bottom: 20px;">
-                                <h4 style="margin: 0; color: #667eea;">AI Confidence: {confidence:.0%}</h4>
-                                <div style="background: #ddd; border-radius: 5px; height: 20px; margin-top: 5px;">
-                                    <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
-                                               width: {confidence*100}%; height: 100%; border-radius: 5px;">
-                                    </div>
-                                </div>
-                            </div>
-                            """, unsafe_allow_html=True)
-                            
-                            # Rep counter update
-                            if features:
-                                # Simple rep counting logic based on knee angle
-                                knee_angle = (features[0] + features[1]) / 2
-                                if knee_angle < 100 and not st.session_state.in_squat:
-                                    st.session_state.in_squat = True
-                                elif knee_angle > 140 and st.session_state.in_squat:
-                                    st.session_state.in_squat = False
-                                    st.session_state.rep_count += 1
-                                    st.session_state.session_stats['total_reps'] += 1
-                                    if prediction == 1:
-                                        st.session_state.session_stats['good_form_reps'] += 1
-                            
-                            # Display rep counter
-                            st.markdown(create_rep_counter_display(st.session_state.rep_count), 
-                                       unsafe_allow_html=True)
-                            
-                            # Feedback tips
-                            st.markdown("""
-                            <div style="background: #f8f9fa; padding: 15px; border-radius: 15px; margin-bottom: 20px;">
-                                <h3 style="color: #667eea; margin-bottom: 10px;">💡 Form Tips</h3>
-                            </div>
-                            """, unsafe_allow_html=True)
-                            
-                            for tip in feedback_list:
-                                st.info(tip)
-                            
-                            # Stress visualization
-                            if stress_data:
-                                st.markdown("""
-                                <div style="background: white; padding: 20px; border-radius: 15px; 
-                                           box-shadow: 0 5px 15px rgba(0,0,0,0.1); margin-top: 20px;">
-                                    <h3 style="color: #667eea; text-align: center; margin-bottom: 20px;">
-                                        🎯 Body Stress Analysis
-                                    </h3>
-                                </div>
-                                """, unsafe_allow_html=True)
-                                
-                                # Create stress gauges
-                                gauge_cols = st.columns(2)
-                                stress_items = list(stress_data.items())
-                                
-                                for idx, (part, stress) in enumerate(stress_items):
-                                    col = gauge_cols[idx % 2]
-                                    with col:
-                                        part_name = part.replace('_stress', '').replace('_', ' ').title()
-                                        fig = create_animated_stress_gauge(stress, part_name)
-                                        st.plotly_chart(fig, use_container_width=True)
-                            
-                            # Pose metrics
-                            if features:
-                                st.markdown("""
-                                <div style="background: linear-gradient(135deg, #6B46C1 0%, #9333EA 100%); 
-                                           color: white; padding: 20px; border-radius: 15px; margin-top: 20px;">
-                                    <h3 style="text-align: center; margin-bottom: 15px;">📊 Pose Metrics</h3>
-                                </div>
-                                """, unsafe_allow_html=True)
-                                
-                                metric_cols = st.columns(2)
-                                metrics = [
-                                    ("Left Knee", features[0], "°"),
-                                    ("Right Knee", features[1], "°"),
-                                    ("Left Hip", features[2], "°"),
-                                    ("Right Hip", features[3], "°"),
-                                    ("Spine Align", features[4] * 100, "%"),
-                                    ("Left Align", features[5] * 100, "%"),
-                                    ("Right Align", features[6] * 100, "%"),
-                                    ("Depth", features[7] * 100, "%")
-                                ]
-                                
-                                for idx, (name, value, unit) in enumerate(metrics):
-                                    col = metric_cols[idx % 2]
-                                    with col:
-                                        # Determine if value is in good range
-                                        is_good = True
-                                        if "Knee" in name or "Hip" in name:
-                                            is_good = 90 <= value <= 120
-                                        elif "Align" in name:
-                                            is_good = value < 8
-                                        elif "Depth" in name:
-                                            is_good = 15 <= value <= 25
-                                        
-                                        color = "#4CAF50" if is_good else "#f44336"
-                                        
-                                        st.markdown(f"""
-                                        <div style="background: {color}; color: white; padding: 10px; 
-                                                   border-radius: 10px; margin: 5px 0; text-align: center;">
-                                            <b>{name}</b><br>
-                                            <span style="font-size: 1.5rem;">{value:.1f}{unit}</span>
-                                        </div>
-                                        """, unsafe_allow_html=True)
-                        else:
-                            st.warning("🔍 No pose detected - make sure you're in frame!")
-                    
-                    # Check if camera is still on
-                    if not st.session_state.get('camera_toggle', False):
-                        break
-                
-                cap.release()
-        
-        elif camera_on and not st.session_state.trained:
-            st.markdown("""
-            <div style="background: #FFF3CD; color: #856404; padding: 20px; 
-                       border-radius: 15px; text-align: center;">
-                <h3>⚠️ Please train the model first!</h3>
-                <p>Click the "Train Model" button in the sidebar to get started.</p>
-            </div>
-            """, unsafe_allow_html=True)
-        
-        else:
-            # Show welcome screen
-            st.markdown("""
-            <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
-                       color: white; padding: 40px; border-radius: 20px; text-align: center;">
-                <h2 style="font-size: 2.5rem; margin-bottom: 20px;">Welcome to AI Fitness Coach! 🎯</h2>
-                <p style="font-size: 1.2rem; margin-bottom: 30px;">
-                    Get real-time feedback on your squat form using advanced AI technology.
-                </p>
-                <div style="background: rgba(255,255,255,0.2); padding: 20px; border-radius: 15px;">
-                    <h3>Quick Start Guide:</h3>
-                    <ol style="text-align: left; font-size: 1.1rem;">
-                        <li>Train the AI model (takes ~5 seconds)</li>
-                        <li>Enable your camera</li>
-                        <li>Position yourself in frame</li>
-                        <li>Start doing squats!</li>
-                    </ol>
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
+    with tab1:
+        render_live_camera_tab(st.session_state.form_checker)
     
-    with col2:
-        if not camera_on:
-            # Show instructions and tips
-            st.markdown("""
-            <div style="background: white; padding: 30px; border-radius: 20px; 
-                       box-shadow: 0 5px 20px rgba(0,0,0,0.1);">
-                <h2 style="color: #667eea; text-align: center; margin-bottom: 20px;">
-                    🏋️‍♂️ Perfect Squat Guide
-                </h2>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            # Exercise tips with colorful cards
-            tips = [
-                ("🦵", "Stance", "Feet shoulder-width apart, toes slightly outward"),
-                ("📐", "Depth", "Lower until thighs are parallel to ground"),
-                ("🎯", "Knees", "Keep knees tracking over toes"),
-                ("🏔️", "Back", "Maintain neutral spine throughout"),
-                ("⚖️", "Weight", "Keep weight balanced on mid-foot"),
-                ("💨", "Breathing", "Inhale down, exhale up")
-            ]
-            
-            for icon, title, desc in tips:
-                st.markdown(f"""
-                <div style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); 
-                           color: white; padding: 15px; border-radius: 10px; margin: 10px 0;">
-                    <h4 style="margin: 0;">{icon} {title}</h4>
-                    <p style="margin: 5px 0 0 0; font-size: 0.9rem;">{desc}</p>
-                </div>
-                """, unsafe_allow_html=True)
-            
-            # Common mistakes section
-            st.markdown("""
-            <div style="background: #FFE5E5; padding: 20px; border-radius: 15px; margin-top: 20px;">
-                <h3 style="color: #D32F2F; margin-bottom: 15px;">❌ Common Mistakes</h3>
-                <ul style="color: #D32F2F;">
-                    <li>Knees caving inward</li>
-                    <li>Heels lifting off ground</li>
-                    <li>Excessive forward lean</li>
-                    <li>Not reaching proper depth</li>
-                    <li>Rounding the back</li>
-                </ul>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            # Benefits section
-            st.markdown("""
-            <div style="background: #E8F5E9; padding: 20px; border-radius: 15px; margin-top: 20px;">
-                <h3 style="color: #2E7D32; margin-bottom: 15px;">✅ Benefits of Squats</h3>
-                <ul style="color: #2E7D32;">
-                    <li>Builds lower body strength</li>
-                    <li>Improves core stability</li>
-                    <li>Enhances mobility & flexibility</li>
-                    <li>Burns calories effectively</li>
-                    <li>Functional movement pattern</li>
-                </ul>
-            </div>
-            """, unsafe_allow_html=True)
+    with tab2:
+        render_video_upload_tab(st.session_state.form_checker)
 
 class FitnessFormChecker:
     """Main application class"""
