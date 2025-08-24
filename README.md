@@ -3,7 +3,7 @@ Of course! Here is a more interactive and visually appealing `README.md` file, u
 ---
 
 <p align="center">
-  <img src="" alt="Project Banner" width="700"/>
+  <img src="https://github.com/magesh121/fitness-form-analyser/blob/main/download.jpg" alt="Project Banner" width="700"/>
 </p>
 
 <h1 align="center">🏋️‍♂️ AI Fitness Form Checker 🤖</h1>
