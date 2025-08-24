@@ -72,7 +72,7 @@ Get your personal AI fitness coach up and running in minutes.
 
 1.  **Clone the repository:**
     ```bash
-    git clone https://github.com/yourusername/fitness-form-checker.git
+    git clone https://github.com/magesh121/fitness-form-checker.git
     cd fitness-form-checker
     ```
 
@@ -141,11 +141,8 @@ Contributions make the open-source community an amazing place to learn, inspire,
 4.  **Push to the Branch** (`git push origin feature/AmazingFeature`)
 5.  **Open a Pull Request**
 
-Please report any bugs or suggest features by opening an [issue](https://github.com/yourusername/fitness-form-checker/issues).
+Please report any bugs or suggest features by opening an [issue](https://github.com/magesh121/fitness-form-analyser/issues).
 
-## 📜 License
-
-Distributed under the MIT License. See `LICENSE` for more information.
 
 ## 🙏 Acknowledgements
 
@@ -158,5 +155,5 @@ A big thank you to the creators of the open-source libraries that made this proj
 <p align="center">
   <b>Enjoying the project? Give it a ⭐️ to show your support!</b>
   <br>
-  <a href="https://github.com/yourusername/fitness-form-checker/stargazers"><img src="https://img.shields.io/github/stars/yourusername/fitness-form-checker?style=social" alt="GitHub Stars"></a>
+  <a href="https://github.com/magesh121/fitness-form-analyser"><img src="https://img.shields.io/github/stars/magesh121/fitness-form-analyser?style=social" alt="GitHub Stars"></a>
 </p>
