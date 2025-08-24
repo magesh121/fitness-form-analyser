@@ -15,7 +15,6 @@
   <a href="https://www.python.org/downloads/release/python-370/"><img src="https://img.shields.io/badge/Python-3.7+-blue.svg" alt="Python Version"></a>
   <a href="https://streamlit.io/"><img src="https://img.shields.io/badge/Framework-Streamlit-red.svg" alt="Streamlit"></a>
   <a href="https://google.github.io/mediapipe/"><img src="https://img.shields.io/badge/Computer%20Vision-MediaPipe-green.svg" alt="MediaPipe"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License"></a>
   <a href="https://github.com/yourusername/fitness-form-checker/issues"><img src="https://img.shields.io/badge/contributions-welcome-brightgreen.svg?style=flat" alt="Contributions Welcome"></a>
 </p>
 
