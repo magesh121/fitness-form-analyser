@@ -1,6 +1,4 @@
-Of course! Here is a more interactive and visually appealing `README.md` file, using Markdown features, emojis, and HTML tags like `<details>` for collapsible sections to make it more engaging and easier to navigate.
 
----
 
 <p align="center">
   <img src="https://github.com/magesh121/fitness-form-analyser/blob/main/download.jpg" alt="Project Banner" width="700"/>
