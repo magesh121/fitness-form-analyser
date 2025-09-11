@@ -1,7 +1,3 @@
-# Tell Streamlit to use a compatible Python version
-python = "3.11"
-
-# Your original app dependencies
 streamlit==1.28.0
 opencv-python==4.8.1.78
 mediapipe==0.10.11
@@ -11,4 +7,3 @@ seaborn==0.13.0
 pandas==2.1.3
 numpy==1.26.2
 plotly==5.18.0
-
