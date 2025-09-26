@@ -22,6 +22,13 @@ from pathlib import Path
 
 warnings.filterwarnings('ignore')
 
+# Set page config at the very beginning
+st.set_page_config(
+    page_title="AI Fitness Form Checker", 
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
 # Custom CSS for enhanced UI
 def load_css():
     st.markdown("""
@@ -101,34 +108,6 @@ def load_css():
         margin: 20px 0;
     }
     
-    /* Success/Error/Warning boxes */
-    .stSuccess {
-        background-color: #4CAF50 !important;
-        color: white !important;
-        border-radius: 10px;
-        padding: 15px;
-        font-weight: bold;
-        box-shadow: 0 5px 15px rgba(76,175,80,0.3);
-    }
-    
-    .stError {
-        background-color: #f44336 !important;
-        color: white !important;
-        border-radius: 10px;
-        padding: 15px;
-        font-weight: bold;
-        box-shadow: 0 5px 15px rgba(244,67,54,0.3);
-    }
-    
-    .stWarning {
-        background-color: #ff9800 !important;
-        color: white !important;
-        border-radius: 10px;
-        padding: 15px;
-        font-weight: bold;
-        box-shadow: 0 5px 15px rgba(255,152,0,0.3);
-    }
-    
     /* Button styling */
     .stButton > button {
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -145,24 +124,6 @@ def load_css():
     .stButton > button:hover {
         transform: translateY(-2px);
         box-shadow: 0 8px 20px rgba(0,0,0,0.3);
-    }
-    
-    /* Video container */
-    .video-container {
-        border-radius: 20px;
-        overflow: hidden;
-        box-shadow: 0 10px 30px rgba(0,0,0,0.3);
-        margin: 20px 0;
-    }
-    
-    /* Info boxes */
-    .info-box {
-        background: linear-gradient(135deg, #6B46C1 0%, #9333EA 100%);
-        color: white;
-        padding: 20px;
-        border-radius: 15px;
-        margin: 10px 0;
-        box-shadow: 0 5px 20px rgba(147,51,234,0.3);
     }
     
     /* Progress bar for video processing */
@@ -202,21 +163,41 @@ class PoseExtractor:
     
     def __init__(self):
         self.mp_pose = mp.solutions.pose
+        self.pose = None
+        self.mp_drawing = mp.solutions.drawing_utils
+        self.mp_drawing_styles = mp.solutions.drawing_styles
+        self.initialize_pose()
+    
+    def initialize_pose(self):
+        """Initialize or reinitialize the pose detector"""
+        if self.pose:
+            self.pose.close()
+        
+        # Initialize with segmentation disabled for video processing
         self.pose = self.mp_pose.Pose(
             static_image_mode=False,
             model_complexity=1,
-            enable_segmentation=True,
+            enable_segmentation=False,  # Disabled to avoid segmentation errors
             min_detection_confidence=0.5,
             min_tracking_confidence=0.5
         )
-        self.mp_drawing = mp.solutions.drawing_utils
-        self.mp_drawing_styles = mp.solutions.drawing_styles
     
     def extract_landmarks(self, image):
         """Extract pose landmarks from image"""
-        rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        results = self.pose.process(rgb_image)
-        return results
+        try:
+            # Ensure image is valid
+            if image is None or image.size == 0:
+                return None
+            
+            # Convert to RGB
+            rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            
+            # Process the image
+            results = self.pose.process(rgb_image)
+            return results
+        except Exception as e:
+            print(f"Error in extract_landmarks: {e}")
+            return None
     
     def calculate_angle(self, a, b, c):
         """Calculate angle between three points"""
@@ -234,221 +215,243 @@ class PoseExtractor:
     
     def extract_squat_features(self, landmarks):
         """Extract features specific to squat exercise"""
-        if not landmarks.pose_landmarks:
+        if not landmarks or not landmarks.pose_landmarks:
             return None
         
-        # Get key landmarks for squat analysis
-        points = landmarks.pose_landmarks.landmark
-        
-        # Hip, knee, ankle points for both legs
-        left_hip = [points[self.mp_pose.PoseLandmark.LEFT_HIP.value].x,
-                   points[self.mp_pose.PoseLandmark.LEFT_HIP.value].y]
-        left_knee = [points[self.mp_pose.PoseLandmark.LEFT_KNEE.value].x,
-                    points[self.mp_pose.PoseLandmark.LEFT_KNEE.value].y]
-        left_ankle = [points[self.mp_pose.PoseLandmark.LEFT_ANKLE.value].x,
-                     points[self.mp_pose.PoseLandmark.LEFT_ANKLE.value].y]
-        
-        right_hip = [points[self.mp_pose.PoseLandmark.RIGHT_HIP.value].x,
-                    points[self.mp_pose.PoseLandmark.RIGHT_HIP.value].y]
-        right_knee = [points[self.mp_pose.PoseLandmark.RIGHT_KNEE.value].x,
-                     points[self.mp_pose.PoseLandmark.RIGHT_KNEE.value].y]
-        right_ankle = [points[self.mp_pose.PoseLandmark.RIGHT_ANKLE.value].x,
-                      points[self.mp_pose.PoseLandmark.RIGHT_ANKLE.value].y]
-        
-        # Shoulder and spine points
-        left_shoulder = [points[self.mp_pose.PoseLandmark.LEFT_SHOULDER.value].x,
-                        points[self.mp_pose.PoseLandmark.LEFT_SHOULDER.value].y]
-        right_shoulder = [points[self.mp_pose.PoseLandmark.RIGHT_SHOULDER.value].x,
-                         points[self.mp_pose.PoseLandmark.RIGHT_SHOULDER.value].y]
-        
-        # Calculate angles
-        left_knee_angle = self.calculate_angle(left_hip, left_knee, left_ankle)
-        right_knee_angle = self.calculate_angle(right_hip, right_knee, right_ankle)
-        
-        # Hip angles (using shoulder-hip-knee)
-        left_hip_angle = self.calculate_angle(left_shoulder, left_hip, left_knee)
-        right_hip_angle = self.calculate_angle(right_shoulder, right_hip, right_knee)
-        
-        # Spine angle (shoulder to hip vertical alignment)
-        spine_angle = abs(left_shoulder[0] - left_hip[0])  # Horizontal deviation
-        
-        # Knee alignment (knees should track over toes)
-        left_knee_alignment = abs(left_knee[0] - left_ankle[0])
-        right_knee_alignment = abs(right_knee[0] - right_ankle[0])
-        
-        # Hip depth (how low the person goes)
-        hip_depth = min(left_hip[1], right_hip[1])
-        knee_level = min(left_knee[1], right_knee[1])
-        squat_depth = hip_depth - knee_level
-        
-        features = [
-            left_knee_angle, right_knee_angle,
-            left_hip_angle, right_hip_angle,
-            spine_angle,
-            left_knee_alignment, right_knee_alignment,
-            squat_depth
-        ]
-        
-        return features
+        try:
+            # Get key landmarks for squat analysis
+            points = landmarks.pose_landmarks.landmark
+            
+            # Hip, knee, ankle points for both legs
+            left_hip = [points[self.mp_pose.PoseLandmark.LEFT_HIP.value].x,
+                       points[self.mp_pose.PoseLandmark.LEFT_HIP.value].y]
+            left_knee = [points[self.mp_pose.PoseLandmark.LEFT_KNEE.value].x,
+                        points[self.mp_pose.PoseLandmark.LEFT_KNEE.value].y]
+            left_ankle = [points[self.mp_pose.PoseLandmark.LEFT_ANKLE.value].x,
+                         points[self.mp_pose.PoseLandmark.LEFT_ANKLE.value].y]
+            
+            right_hip = [points[self.mp_pose.PoseLandmark.RIGHT_HIP.value].x,
+                        points[self.mp_pose.PoseLandmark.RIGHT_HIP.value].y]
+            right_knee = [points[self.mp_pose.PoseLandmark.RIGHT_KNEE.value].x,
+                         points[self.mp_pose.PoseLandmark.RIGHT_KNEE.value].y]
+            right_ankle = [points[self.mp_pose.PoseLandmark.RIGHT_ANKLE.value].x,
+                          points[self.mp_pose.PoseLandmark.RIGHT_ANKLE.value].y]
+            
+            # Shoulder and spine points
+            left_shoulder = [points[self.mp_pose.PoseLandmark.LEFT_SHOULDER.value].x,
+                            points[self.mp_pose.PoseLandmark.LEFT_SHOULDER.value].y]
+            right_shoulder = [points[self.mp_pose.PoseLandmark.RIGHT_SHOULDER.value].x,
+                             points[self.mp_pose.PoseLandmark.RIGHT_SHOULDER.value].y]
+            
+            # Calculate angles
+            left_knee_angle = self.calculate_angle(left_hip, left_knee, left_ankle)
+            right_knee_angle = self.calculate_angle(right_hip, right_knee, right_ankle)
+            
+            # Hip angles (using shoulder-hip-knee)
+            left_hip_angle = self.calculate_angle(left_shoulder, left_hip, left_knee)
+            right_hip_angle = self.calculate_angle(right_shoulder, right_hip, right_knee)
+            
+            # Spine angle (shoulder to hip vertical alignment)
+            spine_angle = abs(left_shoulder[0] - left_hip[0])  # Horizontal deviation
+            
+            # Knee alignment (knees should track over toes)
+            left_knee_alignment = abs(left_knee[0] - left_ankle[0])
+            right_knee_alignment = abs(right_knee[0] - right_ankle[0])
+            
+            # Hip depth (how low the person goes)
+            hip_depth = min(left_hip[1], right_hip[1])
+            knee_level = min(left_knee[1], right_knee[1])
+            squat_depth = hip_depth - knee_level
+            
+            features = [
+                left_knee_angle, right_knee_angle,
+                left_hip_angle, right_hip_angle,
+                spine_angle,
+                left_knee_alignment, right_knee_alignment,
+                squat_depth
+            ]
+            
+            return features
+        except Exception as e:
+            print(f"Error in extract_squat_features: {e}")
+            return None
     
     def draw_enhanced_pose(self, image, landmarks, prediction, stress_data):
         """Draw enhanced pose visualization with colorful overlays"""
-        if not landmarks.pose_landmarks:
+        if not landmarks or not landmarks.pose_landmarks or image is None:
             return image
         
-        h, w, _ = image.shape
-        
-        # Create overlay for effects
-        overlay = image.copy()
-        
-        # Add gradient background effect
-        gradient = np.zeros_like(overlay)
-        for i in range(h):
-            gradient[i, :] = [int(255 * (1 - i/h) * 0.2), 
-                            int(150 * (1 - i/h) * 0.2), 
-                            int(255 * (i/h) * 0.2)]
-        overlay = cv2.addWeighted(overlay, 0.7, gradient, 0.3, 0)
-        
-        # Draw skeleton with custom colors based on stress
-        self.draw_colored_skeleton(overlay, landmarks, stress_data, w, h)
-        
-        # Add form status badge
-        status_text = "EXCELLENT FORM!" if prediction == 1 else "NEEDS IMPROVEMENT"
-        status_color = (0, 255, 0) if prediction == 1 else (0, 0, 255)
-        
-        # Badge background
-        badge_bg = (0, 200, 0) if prediction == 1 else (200, 0, 0)
-        cv2.rectangle(overlay, (w-250, 20), (w-20, 70), badge_bg, -1)
-        cv2.rectangle(overlay, (w-250, 20), (w-20, 70), status_color, 3)
-        cv2.putText(overlay, status_text, (w-240, 50), 
-                   cv2.FONT_HERSHEY_DUPLEX, 0.7, (255, 255, 255), 2)
-        
-        # Add performance metrics overlay
-        self.draw_performance_overlay(overlay, stress_data, w, h)
-        
-        # Blend with original
-        result = cv2.addWeighted(image, 0.6, overlay, 0.4, 0)
-        
-        return result
+        try:
+            h, w, _ = image.shape
+            
+            # Create overlay for effects
+            overlay = image.copy()
+            
+            # Add gradient background effect
+            gradient = np.zeros_like(overlay)
+            for i in range(h):
+                gradient[i, :] = [int(255 * (1 - i/h) * 0.2), 
+                                int(150 * (1 - i/h) * 0.2), 
+                                int(255 * (i/h) * 0.2)]
+            overlay = cv2.addWeighted(overlay, 0.7, gradient, 0.3, 0)
+            
+            # Draw skeleton with custom colors based on stress
+            self.draw_colored_skeleton(overlay, landmarks, stress_data, w, h)
+            
+            # Add form status badge
+            if prediction is not None:
+                status_text = "EXCELLENT FORM!" if prediction == 1 else "NEEDS IMPROVEMENT"
+                status_color = (0, 255, 0) if prediction == 1 else (0, 0, 255)
+                
+                # Badge background
+                badge_bg = (0, 200, 0) if prediction == 1 else (200, 0, 0)
+                cv2.rectangle(overlay, (w-250, 20), (w-20, 70), badge_bg, -1)
+                cv2.rectangle(overlay, (w-250, 20), (w-20, 70), status_color, 3)
+                cv2.putText(overlay, status_text, (w-240, 50), 
+                           cv2.FONT_HERSHEY_DUPLEX, 0.7, (255, 255, 255), 2)
+            
+            # Add performance metrics overlay
+            if stress_data:
+                self.draw_performance_overlay(overlay, stress_data, w, h)
+            
+            # Blend with original
+            result = cv2.addWeighted(image, 0.6, overlay, 0.4, 0)
+            
+            return result
+        except Exception as e:
+            print(f"Error in draw_enhanced_pose: {e}")
+            return image
     
     def draw_colored_skeleton(self, image, landmarks, stress_data, width, height):
         """Draw skeleton with gradient colors based on stress levels"""
-        points = landmarks.pose_landmarks.landmark
-        
-        # Define connections with their stress associations
-        connections = [
-            # Left leg
-            (self.mp_pose.PoseLandmark.LEFT_HIP, self.mp_pose.PoseLandmark.LEFT_KNEE, 'left_knee_stress'),
-            (self.mp_pose.PoseLandmark.LEFT_KNEE, self.mp_pose.PoseLandmark.LEFT_ANKLE, 'left_ankle_stress'),
-            # Right leg
-            (self.mp_pose.PoseLandmark.RIGHT_HIP, self.mp_pose.PoseLandmark.RIGHT_KNEE, 'right_knee_stress'),
-            (self.mp_pose.PoseLandmark.RIGHT_KNEE, self.mp_pose.PoseLandmark.RIGHT_ANKLE, 'right_ankle_stress'),
-            # Torso
-            (self.mp_pose.PoseLandmark.LEFT_SHOULDER, self.mp_pose.PoseLandmark.LEFT_HIP, 'spine_stress'),
-            (self.mp_pose.PoseLandmark.RIGHT_SHOULDER, self.mp_pose.PoseLandmark.RIGHT_HIP, 'spine_stress'),
-            # Arms
-            (self.mp_pose.PoseLandmark.LEFT_SHOULDER, self.mp_pose.PoseLandmark.LEFT_ELBOW, None),
-            (self.mp_pose.PoseLandmark.LEFT_ELBOW, self.mp_pose.PoseLandmark.LEFT_WRIST, None),
-            (self.mp_pose.PoseLandmark.RIGHT_SHOULDER, self.mp_pose.PoseLandmark.RIGHT_ELBOW, None),
-            (self.mp_pose.PoseLandmark.RIGHT_ELBOW, self.mp_pose.PoseLandmark.RIGHT_WRIST, None),
-        ]
-        
-        # Draw connections with gradient effect
-        for start, end, stress_key in connections:
-            start_point = (int(points[start.value].x * width), 
-                          int(points[start.value].y * height))
-            end_point = (int(points[end.value].x * width), 
-                        int(points[end.value].y * height))
+        try:
+            points = landmarks.pose_landmarks.landmark
             
-            # Get stress level for color
-            stress = stress_data.get(stress_key, 0) if stress_key else 0
+            # Define connections with their stress associations
+            connections = [
+                # Left leg
+                (self.mp_pose.PoseLandmark.LEFT_HIP, self.mp_pose.PoseLandmark.LEFT_KNEE, 'left_knee_stress'),
+                (self.mp_pose.PoseLandmark.LEFT_KNEE, self.mp_pose.PoseLandmark.LEFT_ANKLE, 'left_ankle_stress'),
+                # Right leg
+                (self.mp_pose.PoseLandmark.RIGHT_HIP, self.mp_pose.PoseLandmark.RIGHT_KNEE, 'right_knee_stress'),
+                (self.mp_pose.PoseLandmark.RIGHT_KNEE, self.mp_pose.PoseLandmark.RIGHT_ANKLE, 'right_ankle_stress'),
+                # Torso
+                (self.mp_pose.PoseLandmark.LEFT_SHOULDER, self.mp_pose.PoseLandmark.LEFT_HIP, 'spine_stress'),
+                (self.mp_pose.PoseLandmark.RIGHT_SHOULDER, self.mp_pose.PoseLandmark.RIGHT_HIP, 'spine_stress'),
+                # Arms
+                (self.mp_pose.PoseLandmark.LEFT_SHOULDER, self.mp_pose.PoseLandmark.LEFT_ELBOW, None),
+                (self.mp_pose.PoseLandmark.LEFT_ELBOW, self.mp_pose.PoseLandmark.LEFT_WRIST, None),
+                (self.mp_pose.PoseLandmark.RIGHT_SHOULDER, self.mp_pose.PoseLandmark.RIGHT_ELBOW, None),
+                (self.mp_pose.PoseLandmark.RIGHT_ELBOW, self.mp_pose.PoseLandmark.RIGHT_WRIST, None),
+            ]
             
-            # Create gradient line
-            num_segments = 10
-            for i in range(num_segments):
-                t1 = i / num_segments
-                t2 = (i + 1) / num_segments
+            # Draw connections with gradient effect
+            for start, end, stress_key in connections:
+                start_point = (int(points[start.value].x * width), 
+                              int(points[start.value].y * height))
+                end_point = (int(points[end.value].x * width), 
+                            int(points[end.value].y * height))
                 
-                x1 = int(start_point[0] * (1 - t1) + end_point[0] * t1)
-                y1 = int(start_point[1] * (1 - t1) + end_point[1] * t1)
-                x2 = int(start_point[0] * (1 - t2) + end_point[0] * t2)
-                y2 = int(start_point[1] * (1 - t2) + end_point[1] * t2)
+                # Get stress level for color
+                stress = stress_data.get(stress_key, 0) if stress_key and stress_data else 0
                 
-                # Color based on stress
-                if stress < 0.3:
-                    color = (0, int(255 * (1 - stress)), 0)
-                elif stress < 0.7:
-                    color = (0, int(255 * (1 - (stress - 0.3) / 0.4)), 
-                            int(255 * (stress - 0.3) / 0.4))
-                else:
-                    color = (int(255 * (stress - 0.7) / 0.3), 0, 
-                            int(255 * (1 - (stress - 0.7) / 0.3)))
+                # Create gradient line
+                num_segments = 10
+                for i in range(num_segments):
+                    t1 = i / num_segments
+                    t2 = (i + 1) / num_segments
+                    
+                    x1 = int(start_point[0] * (1 - t1) + end_point[0] * t1)
+                    y1 = int(start_point[1] * (1 - t1) + end_point[1] * t1)
+                    x2 = int(start_point[0] * (1 - t2) + end_point[0] * t2)
+                    y2 = int(start_point[1] * (1 - t2) + end_point[1] * t2)
+                    
+                    # Color based on stress
+                    if stress < 0.3:
+                        color = (0, int(255 * (1 - stress)), 0)
+                    elif stress < 0.7:
+                        color = (0, int(255 * (1 - (stress - 0.3) / 0.4)), 
+                                int(255 * (stress - 0.3) / 0.4))
+                    else:
+                        color = (int(255 * (stress - 0.7) / 0.3), 0, 
+                                int(255 * (1 - (stress - 0.7) / 0.3)))
+                    
+                    thickness = int(8 - stress * 3)
+                    cv2.line(image, (x1, y1), (x2, y2), color, thickness)
+            
+            # Draw joints with glow effect
+            key_joints = [
+                self.mp_pose.PoseLandmark.LEFT_SHOULDER,
+                self.mp_pose.PoseLandmark.RIGHT_SHOULDER,
+                self.mp_pose.PoseLandmark.LEFT_HIP,
+                self.mp_pose.PoseLandmark.RIGHT_HIP,
+                self.mp_pose.PoseLandmark.LEFT_KNEE,
+                self.mp_pose.PoseLandmark.RIGHT_KNEE,
+                self.mp_pose.PoseLandmark.LEFT_ANKLE,
+                self.mp_pose.PoseLandmark.RIGHT_ANKLE,
+            ]
+            
+            for joint in key_joints:
+                x = int(points[joint.value].x * width)
+                y = int(points[joint.value].y * height)
                 
-                thickness = int(8 - stress * 3)
-                cv2.line(image, (x1, y1), (x2, y2), color, thickness)
-        
-        # Draw joints with glow effect
-        key_joints = [
-            self.mp_pose.PoseLandmark.LEFT_SHOULDER,
-            self.mp_pose.PoseLandmark.RIGHT_SHOULDER,
-            self.mp_pose.PoseLandmark.LEFT_HIP,
-            self.mp_pose.PoseLandmark.RIGHT_HIP,
-            self.mp_pose.PoseLandmark.LEFT_KNEE,
-            self.mp_pose.PoseLandmark.RIGHT_KNEE,
-            self.mp_pose.PoseLandmark.LEFT_ANKLE,
-            self.mp_pose.PoseLandmark.RIGHT_ANKLE,
-        ]
-        
-        for joint in key_joints:
-            x = int(points[joint.value].x * width)
-            y = int(points[joint.value].y * height)
-            
-            # Glow effect
-            for r in range(20, 5, -2):
-                alpha = (20 - r) / 15
-                color = (int(255 * alpha), int(200 * alpha), int(100 * alpha))
-                cv2.circle(image, (x, y), r, color, -1)
-            
-            # Core joint
-            cv2.circle(image, (x, y), 5, (255, 255, 255), -1)
+                # Glow effect
+                for r in range(20, 5, -2):
+                    alpha = (20 - r) / 15
+                    color = (int(255 * alpha), int(200 * alpha), int(100 * alpha))
+                    cv2.circle(image, (x, y), r, color, -1)
+                
+                # Core joint
+                cv2.circle(image, (x, y), 5, (255, 255, 255), -1)
+        except Exception as e:
+            print(f"Error in draw_colored_skeleton: {e}")
     
     def draw_performance_overlay(self, image, stress_data, width, height):
         """Draw performance metrics overlay"""
-        # Performance bar at bottom
-        bar_height = 60
-        bar_y = height - bar_height - 20
-        
-        # Semi-transparent background
-        overlay = image.copy()
-        cv2.rectangle(overlay, (20, bar_y), (width - 20, height - 20), (0, 0, 0), -1)
-        cv2.addWeighted(overlay, 0.5, image, 0.5, 0, image)
-        
-        # Draw stress bars
-        metrics = list(stress_data.items())
-        bar_width = (width - 40) // len(metrics)
-        
-        for i, (name, value) in enumerate(metrics):
-            x_start = 30 + i * bar_width
-            x_end = x_start + bar_width - 10
+        try:
+            # Performance bar at bottom
+            bar_height = 60
+            bar_y = height - bar_height - 20
             
-            # Background bar
-            cv2.rectangle(image, (x_start, bar_y + 30), (x_end, bar_y + 50), (50, 50, 50), -1)
+            # Semi-transparent background
+            overlay = image.copy()
+            cv2.rectangle(overlay, (20, bar_y), (width - 20, height - 20), (0, 0, 0), -1)
+            cv2.addWeighted(overlay, 0.5, image, 0.5, 0, image)
             
-            # Stress bar
-            bar_length = int((x_end - x_start) * value)
-            if value < 0.3:
-                color = (0, 255, 0)
-            elif value < 0.7:
-                color = (0, 255, 255)
-            else:
-                color = (0, 0, 255)
-            
-            cv2.rectangle(image, (x_start, bar_y + 30), (x_start + bar_length, bar_y + 50), color, -1)
-            
-            # Label
-            label = name.replace('_stress', '').replace('_', ' ').title()
-            cv2.putText(image, label, (x_start, bar_y + 25), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+            # Draw stress bars
+            metrics = list(stress_data.items())
+            if len(metrics) > 0:
+                bar_width = (width - 40) // len(metrics)
+                
+                for i, (name, value) in enumerate(metrics):
+                    x_start = 30 + i * bar_width
+                    x_end = x_start + bar_width - 10
+                    
+                    # Background bar
+                    cv2.rectangle(image, (x_start, bar_y + 30), (x_end, bar_y + 50), (50, 50, 50), -1)
+                    
+                    # Stress bar
+                    bar_length = int((x_end - x_start) * value)
+                    if value < 0.3:
+                        color = (0, 255, 0)
+                    elif value < 0.7:
+                        color = (0, 255, 255)
+                    else:
+                        color = (0, 0, 255)
+                    
+                    cv2.rectangle(image, (x_start, bar_y + 30), (x_start + bar_length, bar_y + 50), color, -1)
+                    
+                    # Label
+                    label = name.replace('_stress', '').replace('_', ' ').title()
+                    cv2.putText(image, label, (x_start, bar_y + 25), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+        except Exception as e:
+            print(f"Error in draw_performance_overlay: {e}")
+    
+    def __del__(self):
+        """Cleanup when object is destroyed"""
+        if hasattr(self, 'pose') and self.pose:
+            self.pose.close()
 
 class SquatFormClassifier:
     """Class to handle squat form classification"""
@@ -550,7 +553,7 @@ class SquatFormClassifier:
     def get_feedback(self, features):
         """Get detailed feedback based on features"""
         if features is None:
-            return "Cannot detect pose properly"
+            return ["Cannot detect pose properly"]
         
         feedback = []
         
@@ -654,9 +657,15 @@ class VideoAnalyzer:
         fps = int(cap.get(cv2.CAP_PROP_FPS))
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         
+        # Get video dimensions
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        
         results = {
             'fps': fps,
             'total_frames': total_frames,
+            'width': width,
+            'height': height,
             'frame_data': [],
             'summary': {
                 'total_reps': 0,
@@ -673,60 +682,84 @@ class VideoAnalyzer:
         knee_angles = []
         hip_angles = []
         
+        # Reinitialize pose detector for video processing
+        self.pose_extractor.initialize_pose()
+        
         while cap.isOpened():
             ret, frame = cap.read()
             if not ret:
                 break
             
+            # Ensure frame is valid
+            if frame is None or frame.size == 0:
+                frame_count += 1
+                continue
+            
+            # Resize frame if too large to prevent memory issues
+            max_width = 1280
+            if frame.shape[1] > max_width:
+                scale = max_width / frame.shape[1]
+                new_width = int(frame.shape[1] * scale)
+                new_height = int(frame.shape[0] * scale)
+                frame = cv2.resize(frame, (new_width, new_height))
+            
             # Update progress
             if progress_callback:
                 progress_callback(frame_count / total_frames)
             
-            # Extract pose
-            landmarks = self.pose_extractor.extract_landmarks(frame)
-            features = self.pose_extractor.extract_squat_features(landmarks)
-            
-            if features:
-                # Get prediction
-                prediction, confidence = self.classifier.predict_form(features)
-                stress_data = self.classifier.calculate_stress_levels(features)
+            try:
+                # Extract pose
+                landmarks = self.pose_extractor.extract_landmarks(frame)
+                features = self.pose_extractor.extract_squat_features(landmarks)
                 
-                # Track metrics
-                knee_angle = (features[0] + features[1]) / 2
-                hip_angle = (features[2] + features[3]) / 2
-                knee_angles.append(knee_angle)
-                hip_angles.append(hip_angle)
-                
-                # Count reps
-                if knee_angle < 100 and not in_squat:
-                    in_squat = True
-                elif knee_angle > 140 and in_squat:
-                    in_squat = False
-                    results['summary']['total_reps'] += 1
-                
-                # Update counters
-                if prediction == 1:
-                    results['summary']['good_form_frames'] += 1
-                else:
-                    results['summary']['bad_form_frames'] += 1
-                
-                # Store frame data
-                frame_info = {
-                    'frame_number': frame_count,
-                    'timestamp': frame_count / fps,
-                    'prediction': prediction,
-                    'confidence': confidence,
-                    'features': features,
-                    'stress_data': stress_data,
-                    'feedback': self.classifier.get_feedback(features)
-                }
-                results['frame_data'].append(frame_info)
-                
-                # Store stress timeline
-                avg_stress = np.mean(list(stress_data.values()))
-                results['summary']['stress_timeline'].append(avg_stress)
+                if features:
+                    # Get prediction
+                    prediction, confidence = self.classifier.predict_form(features)
+                    stress_data = self.classifier.calculate_stress_levels(features)
+                    
+                    # Track metrics
+                    knee_angle = (features[0] + features[1]) / 2
+                    hip_angle = (features[2] + features[3]) / 2
+                    knee_angles.append(knee_angle)
+                    hip_angles.append(hip_angle)
+                    
+                    # Count reps
+                    if knee_angle < 100 and not in_squat:
+                        in_squat = True
+                    elif knee_angle > 140 and in_squat:
+                        in_squat = False
+                        results['summary']['total_reps'] += 1
+                    
+                    # Update counters
+                    if prediction == 1:
+                        results['summary']['good_form_frames'] += 1
+                    else:
+                        results['summary']['bad_form_frames'] += 1
+                    
+                    # Store frame data
+                    frame_info = {
+                        'frame_number': frame_count,
+                        'timestamp': frame_count / fps,
+                        'prediction': prediction,
+                        'confidence': confidence,
+                        'features': features,
+                        'stress_data': stress_data,
+                        'feedback': self.classifier.get_feedback(features)
+                    }
+                    results['frame_data'].append(frame_info)
+                    
+                    # Store stress timeline
+                    avg_stress = np.mean(list(stress_data.values()))
+                    results['summary']['stress_timeline'].append(avg_stress)
+            except Exception as e:
+                print(f"Error processing frame {frame_count}: {e}")
             
             frame_count += 1
+            
+            # Process every nth frame for long videos
+            if total_frames > 1000 and frame_count % 2 == 1:
+                cap.read()  # Skip frame
+                frame_count += 1
         
         # Calculate averages
         if knee_angles:
@@ -739,45 +772,71 @@ class VideoAnalyzer:
     
     def create_highlight_reel(self, video_path, results, output_path):
         """Create a highlight video with annotations"""
-        cap = cv2.VideoCapture(video_path)
-        fps = int(cap.get(cv2.CAP_PROP_FPS))
-        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        
-        # Video writer
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
-        
-        frame_count = 0
-        for frame_info in results['frame_data']:
-            ret, frame = cap.read()
-            if not ret:
-                break
+        try:
+            cap = cv2.VideoCapture(video_path)
+            fps = int(cap.get(cv2.CAP_PROP_FPS))
+            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
             
-            if frame_count == frame_info['frame_number']:
-                # Extract pose for visualization
-                landmarks = self.pose_extractor.extract_landmarks(frame)
-                
-                # Draw enhanced visualization
-                frame_with_viz = self.pose_extractor.draw_enhanced_pose(
-                    frame, landmarks, 
-                    frame_info['prediction'], 
-                    frame_info['stress_data']
-                )
-                
-                # Add timestamp
-                timestamp_text = f"Time: {frame_info['timestamp']:.1f}s"
-                cv2.putText(frame_with_viz, timestamp_text, (20, 30),
-                           cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-                
-                out.write(frame_with_viz)
+            # Resize if too large
+            max_width = 1280
+            if width > max_width:
+                scale = max_width / width
+                width = int(width * scale)
+                height = int(height * scale)
             
-            frame_count += 1
-        
-        cap.release()
-        out.release()
-        
-        return output_path
+            # Video writer
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+            
+            # Reinitialize pose detector
+            self.pose_extractor.initialize_pose()
+            
+            frame_count = 0
+            frame_data_idx = 0
+            
+            while cap.isOpened() and frame_data_idx < len(results['frame_data']):
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                
+                # Resize frame if needed
+                if frame.shape[:2] != (height, width):
+                    frame = cv2.resize(frame, (width, height))
+                
+                frame_info = results['frame_data'][frame_data_idx]
+                
+                if frame_count == frame_info['frame_number']:
+                    # Extract pose for visualization
+                    landmarks = self.pose_extractor.extract_landmarks(frame)
+                    
+                    # Draw enhanced visualization
+                    frame_with_viz = self.pose_extractor.draw_enhanced_pose(
+                        frame, landmarks, 
+                        frame_info['prediction'], 
+                        frame_info['stress_data']
+                    )
+                    
+                    # Add timestamp
+                    timestamp_text = f"Time: {frame_info['timestamp']:.1f}s"
+                    cv2.putText(frame_with_viz, timestamp_text, (20, 30),
+                               cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+                    
+                    out.write(frame_with_viz)
+                    frame_data_idx += 1
+                else:
+                    # Write frame without annotations
+                    out.write(frame)
+                
+                frame_count += 1
+            
+            cap.release()
+            out.release()
+            
+            return output_path
+        except Exception as e:
+            print(f"Error creating highlight reel: {e}")
+            return None
 
 def create_animated_stress_gauge(stress_value, label):
     """Create an animated gauge chart for stress visualization"""
@@ -793,7 +852,7 @@ def create_animated_stress_gauge(stress_value, label):
             'bgcolor': "white",
             'borderwidth': 2,
             'bordercolor': "gray",
-            'steps': [
+                        'steps': [
                 {'range': [0, 0.3], 'color': 'lightgreen'},
                 {'range': [0.3, 0.7], 'color': 'yellow'},
                 {'range': [0.7, 1], 'color': 'lightcoral'}
@@ -850,7 +909,7 @@ def create_video_analysis_summary(results):
         mode='lines',
         name='Average Stress',
         line=dict(color='rgb(255, 0, 0)', width=2)
-            ))
+    ))
     
     # Add form quality indicators
     good_form_times = []
@@ -1205,31 +1264,32 @@ def display_video_analysis_results(results, video_path, video_analyzer,
             output_path = "highlighted_video.mp4"
             video_analyzer.create_highlight_reel(video_path, results, output_path)
             
-            # Provide download link
-            with open(output_path, 'rb') as f:
-                video_bytes = f.read()
-                st.download_button(
-                    label="📥 Download Annotated Video",
-                    data=video_bytes,
-                    file_name="squat_analysis_highlights.mp4",
-                    mime="video/mp4"
-                )
-            
-            # Clean up
-            try:
-                os.unlink(output_path)
-            except:
-                pass
+            if os.path.exists(output_path):
+                # Provide download link
+                with open(output_path, 'rb') as f:
+                    video_bytes = f.read()
+                    st.download_button(
+                        label="📥 Download Annotated Video",
+                        data=video_bytes,
+                        file_name="squat_analysis_highlights.mp4",
+                        mime="video/mp4"
+                    )
+                
+                # Clean up
+                try:
+                    os.unlink(output_path)
+                except:
+                    pass
     
     # Export report if requested
     if export_report:
         st.markdown("### 📄 Export Analysis Report")
         report = generate_analysis_report(results)
         st.download_button(
-            label="📥 Download Report (PDF)",
+            label="📥 Download Report (TXT)",
             data=report,
-            file_name="squat_analysis_report.pdf",
-            mime="application/pdf"
+            file_name="squat_analysis_report.txt",
+            mime="text/plain"
         )
 
 def render_feedback_panel(placeholder, prediction, confidence, features, stress_data, feedback_list):
@@ -1369,45 +1429,38 @@ def render_exercise_guide():
         """, unsafe_allow_html=True)
 
 def generate_analysis_report(results):
-    """Generate a PDF report of the analysis (placeholder for actual PDF generation)"""
-    # This is a placeholder - in a real implementation, you would use a library like reportlab
-    # to generate an actual PDF report
+    """Generate a text report of the analysis"""
     report_content = f"""
-    SQUAT FORM ANALYSIS REPORT
-    ==========================
-    
-    Analysis Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-    
-    SUMMARY METRICS
-    ---------------
-    Total Reps: {results['summary']['total_reps']}
-    Good Form Frames: {results['summary']['good_form_frames']}
-    Bad Form Frames: {results['summary']['bad_form_frames']}
-    Good Form Percentage: {(results['summary']['good_form_frames'] / results['total_frames'] * 100):.1f}%
-    
-    Average Knee Angle: {results['summary']['average_knee_angle']:.1f}°
-    Average Hip Angle: {results['summary']['average_hip_angle']:.1f}°
-    
-    RECOMMENDATIONS
-    ---------------
-    Based on the analysis, focus on:
-    1. Maintaining consistent knee angle between 90-120 degrees
-    2. Keeping spine neutral throughout the movement
-    3. Ensuring knees track over toes
-    
-    For detailed frame-by-frame analysis, please refer to the highlighted video.
-    """
+SQUAT FORM ANALYSIS REPORT
+==========================
+
+Analysis Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+SUMMARY METRICS
+---------------
+Total Reps: {results['summary']['total_reps']}
+Good Form Frames: {results['summary']['good_form_frames']}
+Bad Form Frames: {results['summary']['bad_form_frames']}
+Good Form Percentage: {(results['summary']['good_form_frames'] / results['total_frames'] * 100):.1f}%
+
+Average Knee Angle: {results['summary']['average_knee_angle']:.1f}°
+Average Hip Angle: {results['summary']['average_hip_angle']:.1f}°
+
+RECOMMENDATIONS
+---------------
+Based on the analysis, focus on:
+1. Maintaining consistent knee angle between 90-120 degrees
+2. Keeping spine neutral throughout the movement
+3. Ensuring knees track over toes
+4. Reaching proper depth for full muscle activation
+
+For detailed frame-by-frame analysis, please refer to the highlighted video.
+"""
     
     return report_content.encode('utf-8')
 
 def create_streamlit_app():
     """Create enhanced Streamlit interface with tabs"""
-    st.set_page_config(
-        page_title="AI Fitness Form Checker", 
-        layout="wide",
-        initial_sidebar_state="expanded"
-    )
-    
     # Load custom CSS
     load_css()
     
