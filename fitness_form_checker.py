@@ -3,6 +3,7 @@ import numpy as np
 import pandas as pd
 import mediapipe as mp
 import streamlit as st
+from streamlit_webrtc import webrtc_streamer, VideoProcessorBase
 import pickle
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -953,103 +954,128 @@ def create_video_analysis_summary(results):
         'timeline_chart': fig_timeline
     }
 
+class FitnessVideoProcessor(VideoProcessorBase):
+    """Process browser webcam frames with MediaPipe/OpenCV for Render deployment."""
+
+    def __init__(self, pose_extractor, classifier):
+        self.pose_extractor = pose_extractor
+        self.classifier = classifier
+        self.rep_count = 0
+        self.in_squat = False
+        self.lock = __import__("threading").Lock()
+
+    def recv(self, frame):
+        img = frame.to_ndarray(format="bgr24")
+
+        # MediaPipe pose detection
+        results = self.pose_extractor.extract_landmarks(img)
+        features = self.pose_extractor.extract_squat_features(results)
+
+        prediction, confidence = self.classifier.predict_form(features)
+        stress_data = self.classifier.calculate_stress_levels(features)
+
+        # Rep counting happens inside the video processor because the
+        # webcam frames are handled asynchronously by WebRTC.
+        if features:
+            knee_angle = (features[0] + features[1]) / 2
+
+            with self.lock:
+                if knee_angle < 100 and not self.in_squat:
+                    self.in_squat = True
+                elif knee_angle > 140 and self.in_squat:
+                    self.in_squat = False
+                    self.rep_count += 1
+
+        # Draw the existing enhanced skeleton/feedback overlay.
+        frame_with_viz = self.pose_extractor.draw_enhanced_pose(
+            img, results, prediction, stress_data
+        )
+
+        # Add live rep count and confidence directly to the video.
+        cv2.rectangle(frame_with_viz, (15, 15), (270, 105), (0, 0, 0), -1)
+        cv2.putText(
+            frame_with_viz,
+            f"Reps: {self.rep_count}",
+            (30, 50),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.9,
+            (255, 255, 255),
+            2,
+        )
+        cv2.putText(
+            frame_with_viz,
+            f"Confidence: {confidence:.0%}",
+            (30, 85),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.65,
+            (255, 255, 255),
+            2,
+        )
+
+        # WebRTC expects a VideoFrame in the same format.
+        return frame.from_ndarray(frame_with_viz, format="bgr24")
+
+
 def render_live_camera_tab(form_checker):
-    """Render the live camera analysis tab"""
+    """Render browser webcam analysis using WebRTC instead of cv2.VideoCapture(0)."""
     col1, col2 = st.columns([3, 2])
-    
+
     with col1:
         st.markdown("""
-        <div style="background: white; padding: 20px; border-radius: 20px; box-shadow: 0 5px 20px rgba(0,0,0,0.1);">
+        <div style="background: white; padding: 20px; border-radius: 20px;
+                    box-shadow: 0 5px 20px rgba(0,0,0,0.1);">
             <h2 style="color: #667eea; text-align: center;">📹 Live Exercise Feed</h2>
         </div>
         """, unsafe_allow_html=True)
-        
-        video_placeholder = st.empty()
-        
-        # Camera control
-        camera_on = st.checkbox("🔴 Enable Live Camera", key="live_camera_toggle")
-        
-        if camera_on and st.session_state.trained:
-            # Start camera and process feed
-            pose_extractor = form_checker.pose_extractor
-            
-            cap = cv2.VideoCapture(0)
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-            
-            if not cap.isOpened():
-                st.error("❌ Cannot access camera")
-            else:
-                # Create placeholder for live updates
-                feedback_placeholder = col2.empty()
-                
-                while camera_on and st.session_state.get('live_camera_toggle', False):
-                    ret, frame = cap.read()
-                    if not ret:
-                        st.error("Failed to read from camera")
-                        break
-                    
-                    # Extract pose
-                    results = pose_extractor.extract_landmarks(frame)
-                    
-                    # Extract features
-                    features = pose_extractor.extract_squat_features(results)
-                    
-                    # Get prediction
-                    prediction, confidence = form_checker.classifier.predict_form(features)
-                    
-                    # Get feedback
-                    feedback_list = form_checker.classifier.get_feedback(features)
-                    
-                    # Calculate stress levels
-                    stress_data = form_checker.classifier.calculate_stress_levels(features)
-                    
-                    # Draw enhanced visualization
-                    frame_with_viz = pose_extractor.draw_enhanced_pose(
-                        frame, results, prediction, stress_data)
-                    
-                    # Display frame
-                    video_placeholder.image(frame_with_viz, channels="BGR", use_column_width=True)
-                    
-                    # Update feedback panel
-                    render_feedback_panel(feedback_placeholder, prediction, confidence, 
-                                        features, stress_data, feedback_list)
-                
-                cap.release()
-        
-        elif camera_on and not st.session_state.trained:
+
+        if not st.session_state.trained:
             st.markdown("""
-            <div style="background: #FFF3CD; color: #856404; padding: 20px; 
+            <div style="background: #FFF3CD; color: #856404; padding: 20px;
                        border-radius: 15px; text-align: center;">
                 <h3>⚠️ Please train the model first!</h3>
                 <p>Click the "Train Model" button in the sidebar to get started.</p>
             </div>
             """, unsafe_allow_html=True)
-        
         else:
-            # Show welcome screen
             st.markdown("""
-            <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
-                       color: white; padding: 40px; border-radius: 20px; text-align: center;">
-                <h2 style="font-size: 2.5rem; margin-bottom: 20px;">Live Camera Analysis 🎯</h2>
-                <p style="font-size: 1.2rem; margin-bottom: 30px;">
-                    Get real-time feedback on your form as you exercise!
-                </p>
-                <div style="background: rgba(255,255,255,0.2); padding: 20px; border-radius: 15px;">
-                    <h3>Instructions:</h3>
-                    <ol style="text-align: left; font-size: 1.1rem;">
-                        <li>Enable your camera using the checkbox above</li>
-                        <li>Position yourself so your full body is visible</li>
-                        <li>Start performing squats</li>
-                        <li>Watch for real-time feedback on your form</li>
-                    </ol>
-                </div>
+            <div style="background: #eef2ff; color: #3730a3; padding: 15px;
+                       border-radius: 15px; margin-bottom: 15px; text-align: center;">
+                <b>Allow camera access when your browser asks for permission.</b><br>
+                Position your full body inside the frame and start squatting.
             </div>
             """, unsafe_allow_html=True)
-    
+
+            webrtc_streamer(
+                key="fitness-camera",
+                video_processor_factory=lambda: FitnessVideoProcessor(
+                    form_checker.pose_extractor,
+                    form_checker.classifier
+                ),
+                media_stream_constraints={
+                    "video": {"width": 640, "height": 480},
+                    "audio": False,
+                },
+                async_processing=True,
+            )
+
     with col2:
-        if not camera_on:
+        if not st.session_state.trained:
             render_exercise_guide()
+        else:
+            st.markdown("""
+            <div style="background: white; padding: 20px; border-radius: 20px;
+                        box-shadow: 0 5px 20px rgba(0,0,0,0.1);">
+                <h3 style="color: #667eea;">💡 Live Analysis</h3>
+                <ul>
+                    <li>MediaPipe detects your body landmarks.</li>
+                    <li>Knee and hip angles are calculated in real time.</li>
+                    <li>Random Forest classifies form quality.</li>
+                    <li>Stress indicators are drawn on the skeleton.</li>
+                    <li>Squat repetitions are counted automatically.</li>
+                </ul>
+                <p><b>Tip:</b> Keep your full body visible and use good lighting.</p>
+            </div>
+            """, unsafe_allow_html=True)
 
 def render_video_upload_tab(form_checker):
     """Render the video upload and analysis tab"""
